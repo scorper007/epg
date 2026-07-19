@@ -25,8 +25,7 @@ NO_PROGRAMME_FILE = Path("no_programme_ids.txt")
 HOURS_AHEAD = 7
 
 # Коррекция отображаемого времени:
-# сдвиг на 6 часов НАЗАД
-TIME_CORRECTION_HOURS = -6
+TIME_CORRECTION_HOURS = 0
 
 
 # ============================================================
