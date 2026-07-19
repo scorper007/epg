@@ -11,7 +11,7 @@ IDS_FILE = Path("channel_ids.txt")
 OUTPUT = Path("epg.xml")
 
 # Сколько суток EPG оставлять
-DAYS_AHEAD = 3
+DAYS_AHEAD = 1
 
 # Загружаем tvg-id наших каналов
 wanted = {
