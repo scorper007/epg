@@ -3,8 +3,10 @@
 import gzip
 import urllib.request
 import xml.etree.ElementTree as ET
+
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+
 
 # ============================================================
 # НАСТРОЙКИ
@@ -18,17 +20,17 @@ OUTPUT = Path("epg.xml")
 MISSING_FILE = Path("missing_ids.txt")
 NO_PROGRAMME_FILE = Path("no_programme_ids.txt")
 
-# Сколько часов программы хранить вперёд
-HOURS_AHEAD = 12
+# Оставляем текущую передачу
+# + программу на 7 часов вперёд
+HOURS_AHEAD = 7
 
-# Небольшой запас назад.
-# Нужен, чтобы сохранить передачу, которая уже началась,
-# но всё ещё идёт.
-HOURS_BACK = 2
+# Коррекция отображаемого времени:
+# сдвиг на 6 часов НАЗАД
+TIME_CORRECTION_HOURS = -6
 
 
 # ============================================================
-# ЧТЕНИЕ СПИСКА КАНАЛОВ
+# ЧИТАЕМ 399 TVG-ID
 # ============================================================
 
 wanted = {
@@ -46,7 +48,7 @@ print(
 
 
 # ============================================================
-# СКАЧИВАНИЕ EPG
+# СКАЧИВАЕМ EPG
 # ============================================================
 
 print(
@@ -57,7 +59,7 @@ request = urllib.request.Request(
     SOURCE,
     headers={
         "User-Agent":
-        "Mozilla/5.0 EPG-Updater/3.0"
+        "Mozilla/5.0 EPG-Updater/4.0"
     }
 )
 
@@ -75,7 +77,7 @@ print(
 
 
 # ============================================================
-# РАСПАКОВКА GZIP
+# РАСПАКОВЫВАЕМ GZIP
 # ============================================================
 
 try:
@@ -84,8 +86,6 @@ try:
 
 except gzip.BadGzipFile:
 
-    # Если источник неожиданно вернул
-    # обычный XML вместо gzip
     xml_data = raw
 
 print(
@@ -95,12 +95,11 @@ print(
 
 
 # ============================================================
-# ЧТЕНИЕ XML
+# ЧИТАЕМ XML
 # ============================================================
 
 root = ET.fromstring(xml_data)
 
-# Создаём новый облегчённый XMLTV
 new_root = ET.Element(
     "tv",
     root.attrib
@@ -110,7 +109,7 @@ matched_channels = set()
 
 
 # ============================================================
-# КАНАЛЫ
+# ДОБАВЛЯЕМ ТОЛЬКО НАШИ 399 КАНАЛОВ
 # ============================================================
 
 for channel in root.findall("channel"):
@@ -123,7 +122,6 @@ for channel in root.findall("channel"):
     if channel_id not in wanted:
         continue
 
-    # Создаём облегчённую запись канала
     new_channel = ET.Element(
         "channel",
         {
@@ -131,24 +129,35 @@ for channel in root.findall("channel"):
         }
     )
 
-    # Оставляем display-name.
-    # Логотипы каналов специально не копируем,
-    # чтобы уменьшить XML.
+    # Оставляем только название канала.
+    # Иконки и прочее удаляем для уменьшения XML.
+
     display_names = channel.findall(
         "display-name"
     )
 
-    for display_name in display_names:
+    if display_names:
+
+        for display_name in display_names:
+
+            new_display_name = ET.SubElement(
+                new_channel,
+                "display-name",
+                display_name.attrib
+            )
+
+            new_display_name.text = (
+                display_name.text or ""
+            )
+
+    else:
 
         new_display_name = ET.SubElement(
             new_channel,
-            "display-name",
-            display_name.attrib
+            "display-name"
         )
 
-        new_display_name.text = (
-            display_name.text or ""
-        )
+        new_display_name.text = channel_id
 
     new_root.append(
         new_channel
@@ -160,7 +169,7 @@ for channel in root.findall("channel"):
 
 
 # ============================================================
-# РАБОТА СО ВРЕМЕНЕМ XMLTV
+# ФУНКЦИЯ ЧТЕНИЯ ВРЕМЕНИ XMLTV
 # ============================================================
 
 def parse_xmltv_time(value):
@@ -170,11 +179,10 @@ def parse_xmltv_time(value):
 
     try:
 
-        # XMLTV обычно выглядит так:
-        #
-        # 20260719123000 +0300
-
         value = value.strip()
+
+        # Например:
+        # 20260719183000 +0300
 
         date_part = value[:14]
 
@@ -237,13 +245,6 @@ now = datetime.now(
     timezone.utc
 )
 
-start_limit = (
-    now
-    - timedelta(
-        hours=HOURS_BACK
-    )
-)
-
 end_limit = (
     now
     + timedelta(
@@ -251,26 +252,37 @@ end_limit = (
     )
 )
 
+print()
+print("Фильтр EPG:")
+
 print(
-    "Фильтр EPG:"
+    "  прошлые передачи: удаляем"
 )
 
 print(
-    f"  назад: {HOURS_BACK} ч."
+    "  текущая передача: оставляем"
 )
 
 print(
-    f"  вперёд: {HOURS_AHEAD} ч."
+    f"  вперёд: {HOURS_AHEAD} часов"
+)
+
+print(
+    f"  коррекция времени: "
+    f"{TIME_CORRECTION_HOURS} часов"
 )
 
 
 # ============================================================
-# ПРОГРАММЫ
+# ОБРАБАТЫВАЕМ ПРОГРАММЫ
 # ============================================================
 
 programme_count = 0
 
 programme_channels = set()
+
+current_programmes = 0
+future_programmes = 0
 
 skipped_old = 0
 skipped_future = 0
@@ -300,6 +312,7 @@ for programme in root.findall(
         "stop"
     )
 
+
     start = parse_xmltv_time(
         start_text
     )
@@ -309,8 +322,7 @@ for programme in root.findall(
     )
 
 
-    # Без корректного start
-    # запись использовать нельзя
+    # Нужен корректный start
     if start is None:
 
         skipped_invalid += 1
@@ -318,57 +330,101 @@ for programme in root.findall(
         continue
 
 
-    # ----------------------------------------
-    # УДАЛЯЕМ СТАРЫЕ ПЕРЕДАЧИ
-    # ----------------------------------------
+    # ========================================================
+    # ОПРЕДЕЛЯЕМ ТЕКУЩУЮ ПЕРЕДАЧУ
+    # ========================================================
+
+    is_current = False
 
     if stop is not None:
 
-        # Если передача закончилась
-        # раньше допустимого диапазона
-        if stop < start_limit:
+        if start <= now < stop:
 
-            skipped_old += 1
+            is_current = True
 
-            continue
+
+    # ========================================================
+    # ТЕКУЩУЮ ПЕРЕДАЧУ ВСЕГДА ОСТАВЛЯЕМ
+    # ========================================================
+
+    if is_current:
+
+        current_programmes += 1
+
 
     else:
 
-        # Если stop отсутствует,
-        # ориентируемся на start
-        if start < start_limit:
+        # ====================================================
+        # ВСЕ ПРОШЕДШИЕ ПЕРЕДАЧИ УДАЛЯЕМ
+        # ====================================================
+
+        if start < now:
 
             skipped_old += 1
 
             continue
 
 
-    # ----------------------------------------
-    # УДАЛЯЕМ СЛИШКОМ ДАЛЁКИЕ ПЕРЕДАЧИ
-    # ----------------------------------------
+        # ====================================================
+        # ОСТАВЛЯЕМ ТОЛЬКО БЛИЖАЙШИЕ 7 ЧАСОВ
+        # ====================================================
 
-    if start > end_limit:
+        if start > end_limit:
 
-        skipped_future += 1
+            skipped_future += 1
 
-        continue
+            continue
+
+        future_programmes += 1
 
 
     # ========================================================
-    # СОЗДАЁМ МИНИМАЛЬНУЮ ЗАПИСЬ PROGRAMME
+    # КОРРЕКЦИЯ ВРЕМЕНИ -6 ЧАСОВ
+    #
+    # ВАЖНО:
+    # сначала мы определили текущую передачу
+    # по реальному времени источника,
+    # и только теперь меняем отображаемое время.
     # ========================================================
+
+    corrected_start = (
+        start
+        + timedelta(
+            hours=TIME_CORRECTION_HOURS
+        )
+    )
 
     attributes = {
-        "start": start_text,
-        "channel": channel_id
+
+        "start":
+        corrected_start.strftime(
+            "%Y%m%d%H%M%S +0000"
+        ),
+
+        "channel":
+        channel_id
     }
 
-    if stop_text:
 
-        attributes["stop"] = (
-            stop_text
+    if stop is not None:
+
+        corrected_stop = (
+            stop
+            + timedelta(
+                hours=TIME_CORRECTION_HOURS
+            )
         )
 
+        attributes["stop"] = (
+            corrected_stop.strftime(
+                "%Y%m%d%H%M%S +0000"
+            )
+        )
+
+
+    # ========================================================
+    # СОЗДАЁМ МИНИМАЛЬНЫЙ PROGRAMME
+    # ========================================================
 
     new_programme = ET.Element(
         "programme",
@@ -400,7 +456,6 @@ for programme in root.findall(
 
     else:
 
-        # На случай передачи без title
         new_title = ET.SubElement(
             new_programme,
             "title"
@@ -409,7 +464,7 @@ for programme in root.findall(
         new_title.text = "Программа"
 
 
-    # НЕ копируем:
+    # НЕ КОПИРУЕМ:
     #
     # desc
     # category
@@ -422,7 +477,7 @@ for programme in root.findall(
     # date
     # sub-title
     #
-    # Это сильно уменьшает размер XML.
+    # Это максимально облегчает EPG.
 
 
     new_root.append(
@@ -488,7 +543,7 @@ NO_PROGRAMME_FILE.write_text(
 
 
 # ============================================================
-# СОХРАНЕНИЕ XML
+# СОХРАНЯЕМ EPG.XML
 # ============================================================
 
 tree = ET.ElementTree(
@@ -507,7 +562,7 @@ tree.write(
 # РАЗМЕР ГОТОВОГО ФАЙЛА
 # ============================================================
 
-output_size = (
+output_size_mb = (
     OUTPUT.stat().st_size
     / 1024
     / 1024
@@ -515,7 +570,7 @@ output_size = (
 
 
 # ============================================================
-# ОТЧЁТ
+# ИТОГОВЫЙ ОТЧЁТ
 # ============================================================
 
 print()
@@ -549,12 +604,22 @@ print(
 )
 
 print(
-    f"Передач сохранено: "
+    f"Текущих передач сохранено: "
+    f"{current_programmes}"
+)
+
+print(
+    f"Будущих передач сохранено: "
+    f"{future_programmes}"
+)
+
+print(
+    f"Всего передач сохранено: "
     f"{programme_count}"
 )
 
 print(
-    f"Старых передач удалено: "
+    f"Прошедших передач удалено: "
     f"{skipped_old}"
 )
 
@@ -569,18 +634,18 @@ print(
 )
 
 print(
-    f"EPG назад: "
-    f"{HOURS_BACK} часа"
+    f"EPG: текущая передача "
+    f"+ {HOURS_AHEAD} часов вперёд"
 )
 
 print(
-    f"EPG вперёд: "
-    f"{HOURS_AHEAD} часов"
+    f"Коррекция времени: "
+    f"{TIME_CORRECTION_HOURS} часов"
 )
 
 print(
     f"Размер готового epg.xml: "
-    f"{output_size:.2f} MB"
+    f"{output_size_mb:.2f} MB"
 )
 
 print(
