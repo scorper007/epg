@@ -4,7 +4,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-SOURCE = "https://epg.one/epg.xml.gz"
+SOURCE = "http://epg.one/epg.xml.gz"
 IDS_FILE = Path("channel_ids.txt")
 OUTPUT = Path("epg.xml")
 
