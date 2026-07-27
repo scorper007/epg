@@ -43,6 +43,8 @@ setanta-sport-premium-ua-hd
 setanta-sport-ua-hd-orig
 start-hd
 suspilne-sport-ua-hd-orig
+tlc
+tlc-hd-orig
 travel-channel
 travel-channel-hd
 upl1-ua-hd
