@@ -5,3 +5,4 @@ amc-hd-orig
 egoist-tv
 food-network-hd
 okko-tv-hd-orig
+suspense-hd
