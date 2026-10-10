@@ -4,3 +4,5 @@
 amc-hd-orig
 food-network-hd
 okko-tv-hd-orig
+tlc
+tlc-hd-orig
