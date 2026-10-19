@@ -1,15 +1,4 @@
 evronews
 evronews-hd
-food-network-hd
-fox
-fox-hd
-hgtv-hd
 m1-global
 m1-global-hd
-nat-geo-wild
-nat-geo-wild-hd-orig
-qsport-hd
-viasat-explore-balt-hd-orig
-viasat-history-balt-hd-orig
-viasat-nature-balt-hd-orig
-viasat-serial-hd
